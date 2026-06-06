@@ -5,16 +5,20 @@ import html
 import os
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 import chromadb
+from chromadb.errors import NotFoundError
 from dotenv import load_dotenv
 from groq import Groq
 from sentence_transformers import SentenceTransformer
 
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
+BOUNDARY_SEARCH_RATIO = 0.6
+PERIOD_SPACE_LENGTH = 2
 
 
 @dataclass
@@ -23,6 +27,28 @@ class Chunk:
     source: str
     chunk_index: int
     text: str
+
+
+class TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: List[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[override]
+        if tag.lower() in {"script", "style"}:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+        if tag.lower() in {"script", "style"} and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:  # type: ignore[override]
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
 
 
 def iter_document_paths(documents_dir: Path) -> Iterable[Path]:
@@ -57,17 +83,17 @@ def load_document_text(path: Path) -> str:
 
 def clean_text(raw_text: str) -> str:
     text = html.unescape(raw_text)
-    text = re.sub(r"<script[\\s\\S]*?</script>", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"<style[\\s\\S]*?</style>", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", " ", text)
+    parser = TextExtractor()
+    parser.feed(text)
+    text = parser.get_text()
 
     noisy_patterns = [
-        r"\\bcookie(s)?\\b",
-        r"\\bprivacy policy\\b",
-        r"\\bterms of service\\b",
-        r"\\bread more\\b",
-        r"\\bshare\\b",
-        r"\\bsubscribe\\b",
+        r"\bcookie(s)?\b",
+        r"\bprivacy policy\b",
+        r"\bterms of service\b",
+        r"\bread more\b",
+        r"\bshare\b",
+        r"\bsubscribe\b",
     ]
 
     cleaned_lines: List[str] = []
@@ -106,12 +132,12 @@ def chunk_text(text: str, chunk_size: int = 600, overlap: int = 120) -> List[str
         end = max_end
 
         if max_end < total:
-            search_start = start + int(chunk_size * 0.6)
+            search_start = start + int(chunk_size * BOUNDARY_SEARCH_RATIO)
             sentence_break = text.rfind(". ", search_start, max_end)
             paragraph_break = text.rfind("\n\n", search_start, max_end)
             chosen = max(sentence_break, paragraph_break)
             if chosen > start:
-                end = chosen + (2 if chosen == sentence_break else 0)
+                end = chosen + (PERIOD_SPACE_LENGTH if chosen == sentence_break else 0)
 
         chunk = text[start:end].strip()
         if chunk:
@@ -133,7 +159,7 @@ def build_chunks(documents_dir: Path, chunk_size: int, overlap: int) -> List[Chu
         cleaned = clean_text(raw)
         text_chunks = chunk_text(cleaned, chunk_size=chunk_size, overlap=overlap)
 
-        rel_source = str(path.relative_to(documents_dir.parent))
+        rel_source = str(path.relative_to(documents_dir))
         for idx, chunk in enumerate(text_chunks):
             all_chunks.append(
                 Chunk(
@@ -151,7 +177,7 @@ def get_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransfo
     return SentenceTransformer(model_name)
 
 
-def get_collection(persist_dir: Path, collection_name: str):
+def get_collection(persist_dir: Path, collection_name: str) -> Tuple[chromadb.ClientAPI, chromadb.Collection]:
     client = chromadb.PersistentClient(path=str(persist_dir))
     return client, client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
 
@@ -176,7 +202,7 @@ def index_documents(
     if reindex:
         try:
             client.delete_collection(collection_name)
-        except Exception:
+        except NotFoundError:
             pass
 
     collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
@@ -200,7 +226,7 @@ def retrieve(
     collection_name: str,
     embedding_model_name: str,
     top_k: int,
-):
+) -> Dict[str, Any]:
     _, collection = get_collection(persist_dir, collection_name)
     if collection.count() == 0:
         raise RuntimeError("Vector store is empty. Run the index command first.")
@@ -239,7 +265,7 @@ def ask_question(
     load_dotenv()
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key or api_key == "your_key_here":
-        raise RuntimeError("Set GROQ_API_KEY in .env before asking questions.")
+        raise RuntimeError("Set GROQ_API_KEY in .env to a valid Groq API key before asking questions.")
 
     retrieval_result = retrieve(
         query=question,
@@ -255,7 +281,7 @@ def ask_question(
         return
 
     system_prompt = (
-        "You are a retrieval-grounded assistant for student knowledge. "
+        "You are a retrieval-grounded assistant. "
         "Answer ONLY using the provided context excerpts. "
         "If the answer is not in the context, say: 'I don't have enough evidence in the retrieved documents.' "
         "Always include citations using [source:chunk] style based on the listed excerpts."
@@ -294,13 +320,13 @@ def ask_question(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Unofficial Guide RAG CLI")
+    parser = argparse.ArgumentParser(description="RAG CLI for document indexing and question answering")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     index_parser = subparsers.add_parser("index", help="Ingest, clean, chunk, and index documents")
     index_parser.add_argument("--documents-dir", type=Path, default=Path("documents"))
     index_parser.add_argument("--persist-dir", type=Path, default=Path("chroma_db"))
-    index_parser.add_argument("--collection", type=str, default="unofficial-guide")
+    index_parser.add_argument("--collection", type=str, default="documents")
     index_parser.add_argument("--chunk-size", type=int, default=600)
     index_parser.add_argument("--overlap", type=int, default=120)
     index_parser.add_argument("--embedding-model", type=str, default="all-MiniLM-L6-v2")
@@ -309,7 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser = subparsers.add_parser("ask", help="Retrieve context and generate grounded answer")
     ask_parser.add_argument("question", type=str)
     ask_parser.add_argument("--persist-dir", type=Path, default=Path("chroma_db"))
-    ask_parser.add_argument("--collection", type=str, default="unofficial-guide")
+    ask_parser.add_argument("--collection", type=str, default="documents")
     ask_parser.add_argument("--embedding-model", type=str, default="all-MiniLM-L6-v2")
     ask_parser.add_argument("--llm-model", type=str, default="llama-3.3-70b-versatile")
     ask_parser.add_argument("--top-k", type=int, default=4)

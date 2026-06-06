@@ -165,9 +165,7 @@
 
 ## Local CLI (Implemented)
 
-This repository now includes a starter RAG CLI at:
-
-- `/tmp/workspace/jtan21at/ai201-project1-unofficial-guide-starter/rag_app.py`
+This repository now includes a starter RAG CLI at `rag_app.py`.
 
 ### 1) Index your documents
 
