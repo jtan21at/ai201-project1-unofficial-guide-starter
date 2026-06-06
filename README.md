@@ -160,3 +160,29 @@
 - *What I gave the AI:*
 - *What it produced:*
 - *What I changed or overrode:*
+
+---
+
+## Local CLI (Implemented)
+
+This repository now includes a starter RAG CLI at:
+
+- `/tmp/workspace/jtan21at/ai201-project1-unofficial-guide-starter/rag_app.py`
+
+### 1) Index your documents
+
+Place source files in `documents/` (`.txt`, `.md`, and optionally `.pdf` if `pdfplumber` is installed), then run:
+
+```bash
+python rag_app.py index --documents-dir documents --reindex
+```
+
+### 2) Ask a grounded question
+
+Set `GROQ_API_KEY` in `.env`, then run:
+
+```bash
+python rag_app.py ask "Is the housing lottery actually random?"
+```
+
+The answer is generated from retrieved chunks only, and the CLI prints both model output and retrieved chunk sources.
