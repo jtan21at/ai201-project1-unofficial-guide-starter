@@ -10,15 +10,18 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 import chromadb
+import numpy as np
 from chromadb.errors import NotFoundError
 from dotenv import load_dotenv
 from groq import Groq
 from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import HashingVectorizer
 
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
 BOUNDARY_SEARCH_RATIO = 0.6
 PERIOD_SPACE_LENGTH = 2
+FALLBACK_VECTOR_DIMENSIONS = 384
 
 
 @dataclass
@@ -177,6 +180,27 @@ def get_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransfo
     return SentenceTransformer(model_name)
 
 
+def _fallback_embed_texts(texts: List[str]) -> List[List[float]]:
+    vectorizer = HashingVectorizer(
+        n_features=FALLBACK_VECTOR_DIMENSIONS,
+        alternate_sign=False,
+        norm="l2",
+    )
+    matrix = vectorizer.transform(texts).toarray()
+    return matrix.astype(np.float32).tolist()
+
+
+def embed_texts(texts: List[str], model_name: str) -> Tuple[List[List[float]], str]:
+    if model_name == "hashing-fallback":
+        return _fallback_embed_texts(texts), "hashing-fallback"
+    try:
+        model = get_embedding_model(model_name)
+        embeddings = model.encode(texts, normalize_embeddings=True).tolist()
+        return embeddings, model_name
+    except Exception:
+        return _fallback_embed_texts(texts), "hashing-fallback"
+
+
 def get_collection(persist_dir: Path, collection_name: str) -> Tuple[chromadb.ClientAPI, chromadb.Collection]:
     client = chromadb.PersistentClient(path=str(persist_dir))
     return client, client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
@@ -195,8 +219,7 @@ def index_documents(
     if not chunks:
         raise RuntimeError(f"No chunks built from {documents_dir}. Add documents before indexing.")
 
-    model = get_embedding_model(embedding_model_name)
-    embeddings = model.encode([c.text for c in chunks], normalize_embeddings=True).tolist()
+    embeddings, active_embedding_backend = embed_texts([c.text for c in chunks], embedding_model_name)
 
     client = chromadb.PersistentClient(path=str(persist_dir))
     if reindex:
@@ -214,6 +237,7 @@ def index_documents(
     )
 
     print(f"Indexed {len(chunks)} chunks into '{collection_name}' at {persist_dir}")
+    print(f"Embedding backend used: {active_embedding_backend}")
     print("Sample chunks:")
     for sample in chunks[:5]:
         print("-" * 80)
@@ -231,8 +255,7 @@ def retrieve(
     if collection.count() == 0:
         raise RuntimeError("Vector store is empty. Run the index command first.")
 
-    model = get_embedding_model(embedding_model_name)
-    query_embedding = model.encode([query], normalize_embeddings=True).tolist()[0]
+    query_embedding = embed_texts([query], embedding_model_name)[0][0]
 
     return collection.query(
         query_embeddings=[query_embedding],
@@ -254,6 +277,54 @@ def build_context(retrieval_result: dict) -> str:
     return "\n\n".join(blocks)
 
 
+def _citation(meta: Dict[str, Any]) -> str:
+    return f"[{meta.get('source', 'unknown')}:{meta.get('chunk_index', '?')}]"
+
+
+def generate_offline_answer(question: str, retrieval_result: Dict[str, Any]) -> str:
+    docs = retrieval_result.get("documents", [[]])[0]
+    metas = retrieval_result.get("metadatas", [[]])[0]
+    if not docs:
+        return "I don't have enough evidence in the retrieved documents."
+
+    keywords = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", question) if len(w) > 3}
+    candidate_lines: List[str] = []
+    used_citations: List[str] = []
+
+    for doc, meta in zip(docs, metas):
+        citation = _citation(meta)
+        for line in re.split(r"(?<=[.!?])\s+|\n", doc):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            line_words = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", stripped)}
+            if keywords and not keywords.intersection(line_words):
+                continue
+            candidate_lines.append(f"- {stripped} {citation}")
+            used_citations.append(citation)
+            if len(candidate_lines) >= 3:
+                break
+        if len(candidate_lines) >= 3:
+            break
+
+    if not candidate_lines:
+        for doc, meta in zip(docs[:2], metas[:2]):
+            citation = _citation(meta)
+            snippet = doc.strip().split("\n")[0]
+            candidate_lines.append(f"- {snippet} {citation}")
+            used_citations.append(citation)
+
+    unique_sources = sorted(set(used_citations))
+    bullets = "\n".join(candidate_lines)
+    sources = "\n".join(f"- {source}" for source in unique_sources)
+    return (
+        "Grounded answer (offline extractive mode):\n"
+        f"{bullets}\n\n"
+        "Sources:\n"
+        f"{sources}"
+    )
+
+
 def ask_question(
     question: str,
     persist_dir: Path,
@@ -261,12 +332,8 @@ def ask_question(
     embedding_model_name: str,
     llm_model: str,
     top_k: int,
+    offline: bool,
 ) -> None:
-    load_dotenv()
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key or api_key == "your_key_here":
-        raise RuntimeError("Set GROQ_API_KEY in .env to a valid Groq API key before asking questions.")
-
     retrieval_result = retrieve(
         query=question,
         persist_dir=persist_dir,
@@ -280,32 +347,42 @@ def ask_question(
         print("No relevant context retrieved.")
         return
 
-    system_prompt = (
-        "You are a retrieval-grounded assistant. "
-        "Answer ONLY using the provided context excerpts. "
-        "If the answer is not in the context, say: 'I don't have enough evidence in the retrieved documents.' "
-        "Always include citations using [source:chunk] style based on the listed excerpts."
-    )
+    if offline:
+        answer = generate_offline_answer(question=question, retrieval_result=retrieval_result)
+    else:
+        load_dotenv()
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key or api_key == "your_key_here":
+            raise RuntimeError(
+                "Set GROQ_API_KEY in .env to a valid Groq API key, or pass --offline."
+            )
 
-    user_prompt = (
-        f"Question: {question}\n\n"
-        f"Context excerpts:\n{context}\n\n"
-        "Return:\n"
-        "1) A concise grounded answer\n"
-        "2) A Sources section listing the supporting excerpts"
-    )
+        system_prompt = (
+            "You are a retrieval-grounded assistant. "
+            "Answer ONLY using the provided context excerpts. "
+            "If the answer is not in the context, say: 'I don't have enough evidence in the retrieved documents.' "
+            "Always include citations using [source:chunk] style based on the listed excerpts."
+        )
 
-    client = Groq(api_key=api_key)
-    completion = client.chat.completions.create(
-        model=llm_model,
-        temperature=0.1,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
+        user_prompt = (
+            f"Question: {question}\n\n"
+            f"Context excerpts:\n{context}\n\n"
+            "Return:\n"
+            "1) A concise grounded answer\n"
+            "2) A Sources section listing the supporting excerpts"
+        )
 
-    answer = completion.choices[0].message.content
+        client = Groq(api_key=api_key)
+        completion = client.chat.completions.create(
+            model=llm_model,
+            temperature=0.1,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        answer = completion.choices[0].message.content
+
     print("\n=== Answer ===\n")
     print(answer)
 
@@ -339,6 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--embedding-model", type=str, default="all-MiniLM-L6-v2")
     ask_parser.add_argument("--llm-model", type=str, default="llama-3.3-70b-versatile")
     ask_parser.add_argument("--top-k", type=int, default=4)
+    ask_parser.add_argument("--offline", action="store_true", help="Use extractive local answer mode")
 
     return parser
 
@@ -365,6 +443,7 @@ def main() -> None:
             embedding_model_name=args.embedding_model,
             llm_model=args.llm_model,
             top_k=args.top_k,
+            offline=args.offline,
         )
 
 
