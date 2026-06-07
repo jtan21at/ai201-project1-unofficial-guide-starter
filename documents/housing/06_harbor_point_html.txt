@@ -1,0 +1,9 @@
+<html>
+<head><title>Harbor Point review</title></head>
+<body>
+<nav>Home | Housing | Reviews | Share</nav>
+<div>Harbor Point has modern kitchens and strong study-lounge WiFi.</div>
+<div>Noise levels are low except when the nearby stadium hosts events.</div>
+<footer>Privacy Policy | Terms of Service | Cookie settings</footer>
+</body>
+</html>

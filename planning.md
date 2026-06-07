@@ -1,151 +1,57 @@
 # Project 1 Planning: The Unofficial Guide
 
 ## Domain
-[What domain did you choose? Why is this knowledge valuable and hard to find through official channels?]
+I chose **off-campus student housing experiences** near a university. This knowledge is valuable because official housing websites mostly show pricing and amenities, but students care about hidden operational details like maintenance speed, noise, mold, parking constraints, and leasing office responsiveness. Those insights are scattered across informal threads and are hard to search systematically.
 
 ## Documents
-[List your specific sources: URLs, subreddit names, forum threads, or file descriptions. Aim for variety — sources that together cover different subtopics or perspectives within your domain.]
-
-## Chunking Strategy
-[How will you split documents into chunks? State your chunk size (in tokens or characters), overlap size, and explain why those numbers fit the structure of your documents. A review-heavy corpus warrants different chunking than a long FAQ.
-
-Guiding questions — use these to think it through before deciding:
-- Are your documents short reviews (1–3 sentences) or long guides (many paragraphs)? How does that affect the right chunk size?
-- If a key fact spans two adjacent chunks, will either chunk be retrievable on its own? What does overlap help with?
-- How would you know if your chunks are too small? Too large? What would bad retrieval results look like in each case?
-
-Useful AI prompts:
-- "Explain how chunk size affects retrieval quality for short, opinion-based reviews."
-- "What are the tradeoffs between chunking by paragraph vs. fixed character count for [my document type]?"
-- "If I use 200-character chunks for review text, what kinds of queries might this fail for?"]
-
-## Retrieval Approach
-[Which embedding model are you using (e.g., all-MiniLM-L6-v2 via sentence-transformers)? How many chunks will you retrieve per query (top-k)? If you were deploying this for real users and cost wasn't a constraint, what tradeoffs would you weigh in choosing a different embedding model — context length, multilingual support, accuracy on domain-specific text, latency?
-
-Guiding questions:
-- How many retrieved chunks is enough to give the LLM useful context? What happens if you retrieve too few? Too many?
-- Why does semantic search find relevant chunks even when the query doesn't share exact words with the document?
-
-Useful AI prompts:
-- "What are different strategies for structuring embeddings for short, opinion-based text?"
-- "What does top-k mean in a retrieval system, and what are the tradeoffs of setting it too high vs. too low?"]
-
-## Evaluation Plan
-[List your 5 test questions with their expected correct answers. Questions should be specific enough that you can judge whether the system's response is right or wrong — "What are good dining halls?" is too vague; "What do students say about wait times at the [dining hall name] during lunch?" is testable.]
-
-## Anticipated Challenges
-[What could go wrong? Consider: noisy or inconsistent documents, missing source attribution, off-topic retrieval, chunks that split key information across boundaries. Name at least two specific risks.]
-
-## AI Tool Plan
-[Which parts of the pipeline do you plan to use AI tools (Claude, Copilot, ChatGPT, etc.) to help you implement? For each part, describe what you'll give the AI as input — which sections of this planning.md, which requirements from the instructions — and what you expect it to produce. Be specific: "I'll prompt Claude with my chunking strategy section and ask it to implement the chunk_text() function" is a plan. "I'll use AI to help me code" is not.]
-
----
- 
-
-## Documents
-
-<!-- List your specific sources: URLs, subreddit names, forum threads, or file descriptions.
-     Aim for at least 10 sources that together cover different subtopics or perspectives within your domain. -->
-
 | # | Source | Description | URL or location |
 |---|--------|-------------|-----------------|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
-| 4 | | | |
-| 5 | | | |
-| 6 | | | |
-| 7 | | | |
-| 8 | | | |
-| 9 | | | |
-| 10 | | | |
-
----
+| 1 | Hillview forum thread | Lottery process and maintenance/noise feedback | `documents/housing/01_hillview_forum.txt` |
+| 2 | Cedar Court Reddit summary | Cost/utilities and move-in support quality | `documents/housing/02_cedar_reddit.txt` |
+| 3 | Rivergate review digest | Walkability, laundry, and parking behavior | `documents/housing/03_rivergate_review.txt` |
+| 4 | Oak Crossing Q&A archive | Bug reports and repair turnaround | `documents/housing/04_oak_crossing_forum.txt` |
+| 5 | Maple Square student blog notes | Commute and transit reliability | `documents/housing/05_maple_square_blog.md` |
+| 6 | Harbor Point HTML snippet | Noise and study-space quality with HTML boilerplate | `documents/housing/06_harbor_point_html.txt` |
+| 7 | Elm Lofts spreadsheet notes | Price and amenities reliability | `documents/housing/07_elm_lofts_sheet.txt` |
+| 8 | Pine Gardens Discord transcript | Non-emergency maintenance timing | `documents/housing/08_pine_gardens_discord.txt` |
+| 9 | Summit House FAQ | Utility inclusion/exclusions and lease terms | `documents/housing/09_summit_house_faq.txt` |
+| 10 | Lakeside student thread | Mold risk and move-in precautions | `documents/housing/10_lakeside_thread.txt` |
 
 ## Chunking Strategy
-
-<!-- How will you split documents into chunks?
-     State your chunk size (in tokens or characters), overlap size, and explain why those
-     numbers fit the structure of your documents.
-     A review-heavy corpus warrants different chunking than a long FAQ. -->
-
-**Chunk size:**
-
-**Overlap:**
-
-**Reasoning:**
-
----
+**Chunk size:** 600 characters  
+**Overlap:** 120 characters  
+**Reasoning:** These source documents are short, review-like notes where each document usually contains 2–5 claims. A medium chunk size keeps each claim bundle together while avoiding giant mixed-topic passages. Overlap helps preserve meaning if a claim is near a chunk boundary. Boundary-aware splitting prefers sentence/paragraph edges to avoid broken fragments.
 
 ## Retrieval Approach
-
-<!-- Which embedding model are you using (e.g., all-MiniLM-L6-v2 via sentence-transformers)?
-     How many chunks will you retrieve per query (top-k)?
-     If you were deploying this for real users and cost wasn't a constraint, what tradeoffs
-     would you weigh in choosing a different embedding model — context length, multilingual
-     support, accuracy on domain-specific text, latency? -->
-
-**Embedding model:**
-
-**Top-k:**
-
-**Production tradeoff reflection:**
-
----
+**Embedding model:** `all-MiniLM-L6-v2` (primary intent), with local `hashing-fallback` when model download is unavailable in sandboxed/offline environments.  
+**Top-k:** 4  
+**Production tradeoff reflection:** For production, I would compare local and API-hosted embeddings on domain recall, latency, and multilingual support. Larger embedding models may improve semantic matching for paraphrased housing questions but increase cost and latency. I would also evaluate context-length compatibility with my generator and whether metadata-aware reranking improves precision over pure vector similarity.
 
 ## Evaluation Plan
-
-<!-- List your 5 test questions with their expected correct answers.
-     Questions should be specific enough that you can judge whether the system's response
-     is right or wrong. "What are good dining halls?" is too vague.
-     "What do students say about wait times at [dining hall name] during lunch?" is testable. -->
-
 | # | Question | Expected answer |
 |---|----------|-----------------|
-| 1 | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
-
----
+| 1 | Is Hillview's housing lottery fully random for all applicants? | Not fully random at the start: renewals are processed first, then remaining units are assigned by lottery. |
+| 2 | Which housing option is described as the cheapest two-bedroom and about how much does it cost per person? | Cedar Court, around $980 per person plus utilities. |
+| 3 | Which complex has very slow non-emergency maintenance and how long do requests take? | Pine Gardens; non-emergency requests often take 5–7 days. |
+| 4 | At Summit House, which utilities are included and which are extra? | Water and trash included; electricity and parking are extra. |
+| 5 | Which place has repeated mold complaints and what precaution did students recommend? | Lakeside Commons; request a pre-move inspection and document damage with photos. |
 
 ## Anticipated Challenges
-
-<!-- What could go wrong? Name at least two specific risks with reasoning.
-     Consider: noisy or inconsistent documents, missing source attribution, off-topic
-     retrieval, chunks that split key information across boundaries. -->
-
-1.
-
-2.
-
----
+1. **Noisy retrieval for mixed-topic short notes:** Similar lexical terms (e.g., “maintenance”, “cost”, “parking”) can pull partially related chunks that dilute final answers.
+2. **Grounding drift during generation:** If context includes both relevant and semi-relevant chunks, the model may blend unrelated claims unless prompt constraints and citation formatting are strict.
 
 ## Architecture
-
-<!-- Draw a diagram of your pipeline showing the five stages:
-     Document Ingestion → Chunking → Embedding + Vector Store → Retrieval → Generation
-     Label each stage with the tool or library you're using.
-     You can use ASCII art, a Mermaid diagram, or embed a sketch as an image.
-     You'll use this diagram as context when prompting AI tools to implement each stage. -->
-
----
+```mermaid
+flowchart LR
+    A[Document Ingestion\nTXT/MD/PDF loader] --> B[Chunking\n600 chars + 120 overlap]
+    B --> C[Embedding + Vector Store\nall-MiniLM-L6-v2 / hashing-fallback + ChromaDB]
+    C --> D[Retrieval\nTop-k semantic similarity]
+    D --> E[Generation\nGroq llama-3.3-70b-versatile or offline extractive mode]
+```
 
 ## AI Tool Plan
+**Milestone 3 — Ingestion and chunking:** I will provide the Domain, Documents, and Chunking Strategy sections to an AI coding assistant and ask it to implement document loading, cleaning, and chunking with overlap and boundary-aware splitting. I expect Python functions plus CLI wiring, then I will verify behavior by inspecting sample chunks.
 
-<!-- For each part of the pipeline below, describe:
-     - Which AI tool you plan to use (Claude, Copilot, ChatGPT, etc.)
-     - What you'll give it as input (which sections of this planning.md, which requirements)
-     - What you expect it to produce
-     - How you'll verify the output matches your spec
+**Milestone 4 — Embedding and retrieval:** I will provide the Retrieval Approach and Architecture sections and ask the AI to implement vector indexing/retrieval using ChromaDB and sentence-transformers. I expect index/query commands and source metadata tracking, then I will verify retrieval quality with targeted test questions.
 
-     "I'll use AI to help me code" is not a plan.
-     "I'll give Claude my Chunking Strategy section and ask it to implement chunk_text()
-     with my specified chunk size and overlap" is a plan. -->
-
-**Milestone 3 — Ingestion and chunking:**
-
-**Milestone 4 — Embedding and retrieval:**
-
-**Milestone 5 — Generation and interface:**
+**Milestone 5 — Generation and interface:** I will provide grounding requirements and evaluation criteria and ask the AI to implement query answering with mandatory citations in a CLI flow. I expect a grounded prompt template and output formatting. I will verify that answers include source citations and reject unsupported claims.
