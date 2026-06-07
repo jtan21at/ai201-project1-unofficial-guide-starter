@@ -1,7 +1,7 @@
 # Project 1 Planning: The Unofficial Guide
 
 ## Domain
-I chose **off-campus student housing experiences** near a university. This knowledge is valuable because official housing websites mostly show pricing and amenities, but students care about hidden operational details like maintenance speed, noise, mold, parking constraints, and leasing-office responsiveness. Those insights are scattered across informal threads and are hard to search systematically.
+I chose **off-campus student housing experiences** near a university. This knowledge is valuable because official housing websites mostly show pricing and amenities, but students care about hidden operational details like maintenance speed, noise, mold, parking constraints, and leasing office responsiveness. Those insights are scattered across informal threads and are hard to search systematically.
 
 ## Documents
 | # | Source | Description | URL or location |

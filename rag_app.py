@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import chromadb
 import numpy as np
@@ -22,6 +22,8 @@ SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
 BOUNDARY_SEARCH_RATIO = 0.6
 PERIOD_SPACE_LENGTH = 2
 FALLBACK_VECTOR_DIMENSIONS = 384
+MIN_KEYWORD_LENGTH = 3
+MAX_EXTRACTIVE_LINES = 3
 
 
 @dataclass
@@ -38,15 +40,15 @@ class TextExtractor(HTMLParser):
         self._parts: List[str] = []
         self._skip_depth = 0
 
-    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[override]
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         if tag.lower() in {"script", "style"}:
             self._skip_depth += 1
 
-    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+    def handle_endtag(self, tag: str) -> None:
         if tag.lower() in {"script", "style"} and self._skip_depth > 0:
             self._skip_depth -= 1
 
-    def handle_data(self, data: str) -> None:  # type: ignore[override]
+    def handle_data(self, data: str) -> None:
         if self._skip_depth == 0:
             self._parts.append(data)
 
@@ -181,6 +183,11 @@ def get_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransfo
 
 
 def _fallback_embed_texts(texts: List[str]) -> List[List[float]]:
+    """Return local hashing embeddings when transformer embeddings are unavailable.
+
+    This keeps indexing/retrieval runnable in offline or restricted environments, but
+    quality is usually lower than sentence-transformer semantic embeddings.
+    """
     vectorizer = HashingVectorizer(
         n_features=FALLBACK_VECTOR_DIMENSIONS,
         alternate_sign=False,
@@ -193,11 +200,15 @@ def _fallback_embed_texts(texts: List[str]) -> List[List[float]]:
 def embed_texts(texts: List[str], model_name: str) -> Tuple[List[List[float]], str]:
     if model_name == "hashing-fallback":
         return _fallback_embed_texts(texts), "hashing-fallback"
-    try:
+    try:  # Graceful degradation: fall back locally if semantic model init fails.
         model = get_embedding_model(model_name)
         embeddings = model.encode(texts, normalize_embeddings=True).tolist()
         return embeddings, model_name
     except Exception:
+        print(
+            f"Embedding model '{model_name}' unavailable (possible network, model-file, or permission issue). "
+            "Using local hashing-fallback mode."
+        )
         return _fallback_embed_texts(texts), "hashing-fallback"
 
 
@@ -217,7 +228,9 @@ def index_documents(
 ) -> None:
     chunks = build_chunks(documents_dir=documents_dir, chunk_size=chunk_size, overlap=overlap)
     if not chunks:
-        raise RuntimeError(f"No chunks built from {documents_dir}. Add documents before indexing.")
+        raise RuntimeError(
+            f"No documents found in {documents_dir}. Ensure the directory contains .txt, .md, or .pdf files."
+        )
 
     embeddings, active_embedding_backend = embed_texts([c.text for c in chunks], embedding_model_name)
 
@@ -253,7 +266,7 @@ def retrieve(
 ) -> Dict[str, Any]:
     _, collection = get_collection(persist_dir, collection_name)
     if collection.count() == 0:
-        raise RuntimeError("Vector store is empty. Run the index command first.")
+        raise RuntimeError('Vector store is empty. Run "python rag_app.py index" to index documents first.')
 
     query_embedding = embed_texts([query], embedding_model_name)[0][0]
 
@@ -287,7 +300,9 @@ def generate_offline_answer(question: str, retrieval_result: Dict[str, Any]) -> 
     if not docs:
         return "I don't have enough evidence in the retrieved documents."
 
-    keywords = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", question) if len(w) > 3}
+    keywords = {
+        w.lower() for w in re.findall(r"[A-Za-z0-9'-]+", question) if len(w) >= MIN_KEYWORD_LENGTH
+    }
     candidate_lines: List[str] = []
     used_citations: List[str] = []
 
@@ -298,13 +313,14 @@ def generate_offline_answer(question: str, retrieval_result: Dict[str, Any]) -> 
             if not stripped:
                 continue
             line_words = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", stripped)}
+            # If keywords exist, keep only lines sharing at least one keyword; otherwise allow all lines.
             if keywords and not keywords.intersection(line_words):
                 continue
             candidate_lines.append(f"- {stripped} {citation}")
             used_citations.append(citation)
-            if len(candidate_lines) >= 3:
+            if len(candidate_lines) >= MAX_EXTRACTIVE_LINES:
                 break
-        if len(candidate_lines) >= 3:
+        if len(candidate_lines) >= MAX_EXTRACTIVE_LINES:
             break
 
     if not candidate_lines:
@@ -352,9 +368,10 @@ def ask_question(
     else:
         load_dotenv()
         api_key = os.getenv("GROQ_API_KEY")
-        if not api_key or api_key == "your_key_here":
+        if not api_key:
             raise RuntimeError(
-                "Set GROQ_API_KEY in .env to a valid Groq API key, or pass --offline."
+                "Set GROQ_API_KEY in .env to a valid Groq API key from https://console.groq.com, "
+                "or pass --offline."
             )
 
         system_prompt = (
