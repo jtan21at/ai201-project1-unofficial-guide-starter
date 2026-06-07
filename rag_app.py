@@ -301,7 +301,9 @@ def generate_offline_answer(question: str, retrieval_result: Dict[str, Any]) -> 
         return "I don't have enough evidence in the retrieved documents."
 
     keywords = {
-        w.lower() for w in re.findall(r"[A-Za-z0-9'-]+", question) if len(w) >= MIN_KEYWORD_LENGTH
+        word.lower()
+        for word in re.findall(r"[A-Za-z0-9'-]+", question)
+        if len(word) >= MIN_KEYWORD_LENGTH
     }
     candidate_lines: List[str] = []
     used_citations: List[str] = []
@@ -312,7 +314,7 @@ def generate_offline_answer(question: str, retrieval_result: Dict[str, Any]) -> 
             stripped = line.strip()
             if not stripped:
                 continue
-            line_words = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", stripped)}
+            line_words = {word.lower() for word in re.findall(r"[A-Za-z0-9]+", stripped)}
             # If keywords exist, keep only lines sharing at least one keyword; otherwise allow all lines.
             if keywords and not keywords.intersection(line_words):
                 continue
